@@ -1,10 +1,6 @@
 require 'llvm/core'
 require 'llvm/execution_engine'
 require 'llvm/transforms/scalar'
-
-require "llvm/core"
-require 'llvm/transforms/ipo'
-require 'llvm/core/pass_manager'
 require_relative './compat'
 
 LLVM.init_x86
@@ -33,17 +29,6 @@ module Toy
   TOK_IDENTIFIER = -4
   TOK_NUMBER = -5
 
-  # control
-  TOK_IF = -6
-  TOK_THEN = -7
-  TOK_ELSE = -8
-  TOK_FOR = -9
-  TOK_IN = -10
-
-  # operators
-  TOK_BINARY = -11
-  TOK_UNARY = -12
-
   $IdentifierStr = nil # Filled in if TOK_IDENTIFIER
   $NumVal = 0          # Filled in if TOK_NUMBER
 
@@ -60,13 +45,6 @@ module Toy
 
       return TOK_DEF if $IdentifierStr == 'def'
       return TOK_EXTERN if $IdentifierStr == 'extern'
-      return TOK_IF if $IdentifierStr == 'if' 
-      return TOK_THEN if $IdentifierStr == 'then' 
-      return TOK_ELSE if $IdentifierStr == 'else' 
-      return TOK_FOR if $IdentifierStr == 'for' 
-      return TOK_IN if $IdentifierStr == 'in' 
-      return TOK_BINARY if $IdentifierStr == 'binary' 
-      return TOK_UNARY if $IdentifierStr == 'unary' 
       return TOK_IDENTIFIER
     end
 
@@ -130,14 +108,6 @@ module Toy
     end
   end
 
-  # UnaryExprAST - Expression class for a unary operator.
-  class UnaryExprAST < ExprAST
-    attr_accessor :opcode, :operand
-    def initialize opcode, operand
-      self.opcode, self.operand = opcode, operand
-    end
-  end
-
   # BinaryExprAST - Expression class for a binary operator.
   class BinaryExprAST < ExprAST
     attr_accessor :op, :lhs, :rhs
@@ -162,54 +132,13 @@ module Toy
     end
   end
 
-  # IfExprAST - Expression class for if/then/else.
-  class IfExprAST < ExprAST
-    attr_accessor :cond, :thn, :els
-    def initialize cond, thn, els
-      self.cond, self.thn, self.els = cond, thn, els
-    end
-
-    def to_s
-      "IfExprAST(#{@cond}, #{@thn}, #{@els})"
-    end
-  end
-
-  # ForExprAST - Expression class for for/in.
-  class ForExprAST < ExprAST
-    attr_accessor :var_name, :start, :last, :step, :body
-    def initialize var_name, start, last, step, body
-      self.var_name, self.start, self.last, self.step, self.body = var_name, start, last, step, body
-    end
-
-    def to_s
-      "ForExprAST(#{@var_name}, #{@start}, #{@last}, #{@step}, #{@body})"
-    end
-  end
-
   # PrototypeAST - This class represents the "prototype" for a function,
   # which captures its name, and its argument names (thus implicitly the number
-  # of arguments the function takes), as well as if it is an operator.
+  # of arguments the function takes).
   class PrototypeAST < ExprAST
-    attr_accessor :name, :args, :is_operator, :precedence
-    def initialize name, args, is_operator=false, precedence=0
-      self.name, self.args, self.is_operator, self.precedence = name, args, is_operator, precedence
-    end
-
-    def unary_op?
-      @is_operator and @args.size == 1
-    end
-
-    def binary_op?
-      @is_operator and @args.size == 2
-    end
-
-    def operator_name
-      raise 'not operator' unless unary_op? or binary_op?
-      @name[-1].to_s
-    end
-
-    def binary_precedence
-      @precedence
+    attr_accessor :name, :args
+    def initialize name, args
+      self.name, self.args = name, args
     end
 
     def to_s
@@ -305,102 +234,21 @@ module Toy
     v
   end
 
-  # ifexpr ::= 'if' expression 'then' expression 'else' expression
-  def self.ParseIfExpr
-    get_next_token # eat the if.
-
-    # condition.
-    cond = ParseExpression()
-    return 0 if cond == 0
-
-    return Error("expected then: #{$CurTok}") unless $CurTok == TOK_THEN
-    get_next_token # eat the then
-
-    thn = ParseExpression()
-    return 0 if thn == 0
-
-    return Error("expected else: #{$CurTok}") unless $CurTok == TOK_ELSE
-
-    get_next_token
-
-    els = ParseExpression()
-    return 0 if els == 0
-
-    IfExprAST.new cond, thn, els
-  end
-
-  # forexpr ::= 'for' identifier '=' expr ',' expr (',' expr)? 'in' expression
-  def self.ParseForExpr
-    get_next_token # eat the for.
-
-    return Error("expected identifier after for: #{$CurTok}") unless $CurTok == TOK_IDENTIFIER
-
-    idName = $IdentifierStr
-    get_next_token # eat identifier.
-
-    return Error("expected '=' after for: #{$CurTok}") unless $CurTok == '='
-    get_next_token # eat '='.
-
-    start = ParseExpression()
-    return 0 if start == 0
-    return Error("expected ',' after for start value: #{$CurTok}") unless $CurTok == ','
-    get_next_token
-
-    last = ParseExpression()
-    return 0 if last == 0
-
-    # The step value is optional.
-    step = 0
-    if $CurTok == ','
-      get_next_token
-      step = ParseExpression()
-      return 0 if step == 0
-    end
-
-    return Error("expected 'in' after for: #{$CurTok}") unless $CurTok == TOK_IN
-    get_next_token # eat 'in'.
-
-    body = ParseExpression()
-    return 0 if body == 0
-
-    return ForExprAST.new(idName, start, last, step, body)
-  end
-
   # primary
   #   ::= identifierexpr
   #   ::= numberexpr
   #   ::= parenexpr
-  #   ::= ifexpr
-  #   ::= forexpr
   def self.ParsePrimary
     case $CurTok
       when TOK_IDENTIFIER; ParseIdentifierExpr()
       when TOK_NUMBER; ParseNumberExpr()
       when '('; ParseParenExpr()
-      when TOK_IF; ParseIfExpr()
-      when TOK_FOR; ParseForExpr()
       else Error("unknown token when expecting an expression: #{$CurTok}")
     end
   end
 
-  # unary
-  #   ::= primary
-  #   ::= '!' unary
-  def self.ParseUnary
-    # If the current token is not an operator, it must be a primary expr.
-    return ParsePrimary() if !isascii($CurTok) || $CurTok == '(' || $CurTok == ','
-
-    # If this is a unary operator, read it.
-    opc = $CurTok
-    get_next_token
-    if operand = ParseUnary()
-      return UnaryExprAST.new opc, operand 
-    end
-    0
-  end
-
   # binoprhs
-  #   ::= ('+' unary)*
+  #   ::= ('+' primary)*
   def self.ParseBinOpRHS expr_prec, lhs
     loop do
       tok_prec = GetTokPrecedence()
@@ -413,8 +261,8 @@ module Toy
       bin_op = $CurTok
       get_next_token # eat binop
 
-      # Parse the unary expression after the binary operator.
-      rhs = ParseUnary()
+      # Parse the primary expression after the binary operator.
+      rhs = ParsePrimary()
       return 0 unless rhs
 
       # If BinOp binds less tightly with RHS than the operator after RHS, let
@@ -431,9 +279,9 @@ module Toy
   end
 
   # expression
-  #   ::= unary binoprhs
+  #   ::= primary binoprhs
   def self.ParseExpression
-    lhs = ParseUnary()
+    lhs = ParsePrimary()
     return 0 unless lhs
 
     ParseBinOpRHS 0, lhs
@@ -441,57 +289,22 @@ module Toy
 
   # prototype
   #   ::= id '(' id* ')'
-  #   ::= binary LETTER number? (id, id)
-  #   ::= unary LETTER (id)
   def self.ParsePrototype
-    fn_name = nil
+    return ErrorP('Expected function name in prototype') unless $CurTok == TOK_IDENTIFIER
 
-    kind = 0 # 0 = identifier, 1 = unary, 2 = binary.
-    binary_precedence = 30
+    fn_name = $IdentifierStr
+    get_next_token
 
-    case $CurTok
-      when TOK_IDENTIFIER
-        fn_anem = $IdentifierStr
-        kind = 0
-        get_next_token
-      when TOK_UNARY
-        get_next_token
-        return ErrorP("Expected unary operator: #{$CurTok}") unless isascii $CurTok
-        fn_name = 'unary'
-        fn_name += $CurTok
-        kind = 1
-        get_next_token
-      when TOK_BINARY
-        get_next_token
-        return ErrorP("Expected binary operator: #{$CurTok}") unless isascii $CurTok
-        fn_name = 'binary'
-        fn_name += $CurTok
-        kind = 2
-        get_next_token
+    return ErrorP("Expected '(' in prototype") unless $CurTok == '('
 
-        # Read the precedence if present.
-        if $CurTok == TOK_NUMBER
-          return ErrorP("Invalid precedecnce: must be 1..100: #{$NumVal}") if $NumVal < 1 || $NumVal > 100
-          binary_precedence = $NumVal
-          get_next_token
-        end
-      else
-        return ErrorP("Expected function name in prototype: #{$CurTok}")
-    end
-
-    return ErrorP("Expected '(' in prototype: #{$CurTok}") unless $CurTok == '('
-    
     arg_names = []
-    arg_names.push $IdentifierStr while get_next_token == TOK_IDENTIFIER
-    return ErrorP("Expected ')' in prototype: #{$CurTok}") unless $CurTok == ')'
+    arg_names << $IdentifierStr while get_next_token == TOK_IDENTIFIER
+    return ErrorP("Expected ')' in prototype") unless $CurTok == ')'
 
     # success.
     get_next_token # eat ')'.
 
-    # Verify right number of names for operator.
-    return ErrorP("Invalid number of operands for operator: #{arg_names.size}") if kind != 0 && arg_names.size != kind
-
-    PrototypeAST.new fn_name, arg_names, kind != 0, binary_precedence
+    PrototypeAST.new fn_name, arg_names
   end
 
   # definition ::= 'def' prototype expression
@@ -543,18 +356,6 @@ module Toy
     end
   end
 
-  class UnaryExprAST
-    def codegen
-      operand_v = @operand.codegen
-      return 0 if operand_v == 0
-
-      f = $TheModule.functions["unary#{@opcode}"]
-      return ErrorV("Unknown unary operator: #{@opcode}") if f.nil?
-
-      $Builder.call f, operand_v, 'unop'
-    end
-  end
-
   class BinaryExprAST
     def codegen
       l = @lhs.codegen
@@ -562,22 +363,15 @@ module Toy
       return 0 if l == 0 or r == 0
 
       case @op
-        when '+'; return $Builder.fadd l, r, 'addtmp'
-        when '-'; return $Builder.fsub l, r, 'subtmp'
-        when '*'; return $Builder.fmul l, r, 'multmp'
+        when '+'; $Builder.fadd l, r, 'addtmp'
+        when '-'; $Builder.fsub l, r, 'subtmp'
+        when '*'; $Builder.fmul l, r, 'multmp'
         when '<' 
-          l = $Builder.fcmp :ult, l, r, 'cmptmp'
+          l = $Builder.fcmp l, r, 'cmptmp'
           # Convert bool 0/1 to double 0.0 or 1.0
-          return $Builder.ui2fp l, LLVM::Double, 'booltmp'
+          $Builder.ui2fp l, :double, 'booltmp' # TODO: ??
+        else; ErrorV("invalid binary operator: #{@op}")
       end
-
-      # If it wasn't a builtin binary operator, it must be a user defined one. Emit
-      # a call to it.
-      f = $TheModule.functions["binary#{@op}"]
-      #assert(F && "binary operator not found!");
-
-      ops = [l, r]
-      $Builder.call f, l, r, 'binop'
     end
   end
 
@@ -585,7 +379,7 @@ module Toy
     def codegen
       # Look up the name in the global module table.
       callee_f = $TheModule.functions[@callee]
-      return ErrorV("Unknown function referenced: #{@callee}") if callee_f == 0 or callee_f.nil?
+      return ErrorV('Unknown function referenced') if callee_f == 0
 
       # If argument mismatch error.
       return ErrorV('Incorrect # arguments passed') if callee_f.params.size != @args.size
@@ -597,143 +391,6 @@ module Toy
       end
 
       $Builder.call callee_f, *args_v
-    end
-  end
-
-  class IfExprAST
-    def codegen
-      cond_v = cond.codegen
-      return 0 if cond_v == 0
-
-      # Convert condition to a bool by comparing equal to 0.0.
-      cond_v = $Builder.fcmp :one, cond_v, LLVM.Float(0.0), 'ifcond'
-
-      the_function = $Builder.insert_block.parent
-
-      # Create blocks for the then and else cases.  Insert the 'then' block at the
-      # end of the function.
-      then_bb = the_function.basic_blocks.append 'then'
-      else_bb = the_function.basic_blocks.append 'else'
-      merge_bb = the_function.basic_blocks.append 'ifcont'
-
-      $Builder.cond cond_v, then_bb, else_bb
-
-      # Emit then value.
-      $Builder.position then_bb, nil
-
-      then_v = @thn.codegen
-      #return 0 if then_v == 0
-
-      $Builder.br merge_bb
-      # Codegen of 'Then' can change the current block, update ThenBB for the PHI.
-      then_bb = $Builder.insert_block
-
-      # Emit else block.
-      $Builder.position else_bb, nil
-
-      else_v = @els.codegen
-      #return 0 if else_v == 0
-
-      $Builder.br merge_bb
-      # Codegen of 'Else' can change the current block, update ElseBB for the PHI.
-      else_bb = $Builder.insert_block
-
-      # Emit merge block.
-      $Builder.position merge_bb, nil
-
-      pn = $Builder.phi LLVM::Double, {then_bb => then_v, else_bb => else_v}, 'iftmp'
-      pn
-    end
-  end
-
-  class ForExprAST
-    def codegen
-      # Output this as:
-      #   ...
-      #   start = startexpr
-      #   goto loop
-      # loop:
-      #   variable = phi [start, loopheader], [nextvariable, loopend]
-      #   ...
-      #   bodyexpr
-      #   ...
-      # loopend:
-      #   step = stepexpr
-      #   nextvariable = variable + step
-      #   endcond = endexpr
-      #   br endcond, loop, endloop
-      # outloop:
-
-      # Emit the start code first, without 'variable' in scope.
-      start_val = @start.codegen
-      return 0 if start_val == 0
-
-      # Make the new basic block for the loop header, inserting after current
-      # block.
-      the_function = $Builder.insert_block.parent
-      preheader_bb = $Builder.insert_block
-      loop_bb = the_function.basic_blocks.append 'loop'
-
-      # Insert an explicit fall through from the current block to the LoopBB.
-      $Builder.br loop_bb
-
-      # Start insertion in LoopBB.
-      $Builder.position loop_bb, nil
-
-      # Start the PHI node with an entry for Start.
-      variable = $Builder.phi LLVM::Double, {preheader_bb => start_val}, @var_name
-
-      # Within the loop, the variable is defined equal to the PHI node.  If it
-      # shadows an existing variable, we have to restore it, so save it now.
-      old_val = $NamedValues[@var_name]
-      $NamedValues[@var_name] = variable
-
-      # Emit the body of the loop.  This, like any other expr, can change the
-      # current BB.  Note that we ignore the value computed by the body, but don't
-      # allow an error.
-      return 0 if @body.codegen == 0
-
-      # Emit the step value.
-      step_val = nil
-      if @step
-        step_val = @step.codegen
-        return 0 if step_val == 0
-      else
-        # If not specified, use 1.0.
-        step_val = 1.0
-      end
-
-      next_var = $Builder.fadd variable, step_val, 'nextvar'
-
-      # Compute the end condition.
-      end_cond = last.codegen
-      return 0 if end_cond == 0
-
-      # Convert condition to a bool by comparing equal to 0.0.
-      end_cond = $Builder.fcmp :one, end_cond, LLVM::Float(0.0), 'loopcond'
-
-      # Create the "after loop" block and insert it.
-      loop_end_bb = $Builder.insert_block
-      after_bb = the_function.basic_blocks.append 'afterloop'
-
-      # Insert the conditional branch into the end of LoopEndBB.
-      $Builder.cond end_cond, loop_bb, after_bb
-
-      # Any new code will be inserted in AfterBB.
-      $Builder.position after_bb, nil
-
-      # Add a new entry to the PHI node for the backedge.
-      variable.add_incoming loop_end_bb => next_var
-
-      # Restore the unshadowed variable.
-      if old_val
-        $NamedValues[@var_name] = old_val
-      else
-        $NamedValues.delete @var_name
-      end
-
-      # for expr always returns 0.0.
-      LLVM::Constant.null LLVM::Double
     end
   end
 
@@ -768,9 +425,6 @@ module Toy
       the_function = @proto.codegen
       return 0 if the_function == 0
 
-      # If this is an operator, install it.
-      $BinopPrecedence[@proto.operator_name] = @proto.binary_precedence if @proto.binary_op?
-
       # Create a new basic block to start insertion into.
       the_function.basic_blocks.append('entry').build do |builder|
         $Builder = builder
@@ -790,8 +444,6 @@ module Toy
 
         # Error reading body, remove function.
         LLVM::C.delete_function the_function
-
-        $BinopPrecedence.delete $proto.operator_name if @proto.binary_op?
         0
       end
     end

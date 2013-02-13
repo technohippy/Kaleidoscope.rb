@@ -441,6 +441,7 @@ module Toy
   $TheModule = nil
   $Builder = nil
   $NamedValues = {}
+  $TheFPM = nil
 
   class NumberExprAST
     def codegen
@@ -671,7 +672,10 @@ module Toy
           $Builder.ret ret_val
 
           # Validate the generated code, checking for consistency.
-          #verifyFunction(*TheFunction);
+          the_function.verify
+
+          # Optimize the function.
+          $TheFPM.run the_function
 
           return the_function
         end
@@ -686,6 +690,8 @@ module Toy
   #===----------------------------------------------------------------------===//
   # Top-Level parsing and JIT Driver
   #===----------------------------------------------------------------------===//
+
+  $TheExecutionEngine = nil
 
   def self.HandleDefinition
     if f = ParseDefinition()
@@ -717,6 +723,14 @@ module Toy
       if lf = f.codegen
         $stderr.print 'Read top-level expression:'
         lf.dump
+
+        # JIT the function, returning a function pointer.
+        #void *FPtr = TheExecutionEngine->getPointerToFunction(LF);
+
+        # Cast it to the right type (takes no arguments, returns a double) so we
+        # can call it as a native function.
+        $stderr.print "Evaluated to #{
+          $TheExecutionEngine.run_function(lf).to_f(LLVM::Double)}\n"
       end
     else
       # Skip token for error recovery.
@@ -741,6 +755,7 @@ module Toy
   # Main driver code.
   #===----------------------------------------------------------------------===//
   def self.main
+    #InitializeNativeTarget();
     #LLVMContext &Context = getGlobalContext();
 
     # Install standard binary operators.
@@ -757,8 +772,32 @@ module Toy
     # Make the module, which holds all the code.
     $TheModule = LLVM::Module.new "my cool jit"
 
+    # Create the JIT.  This takes ownership of the module.
+    $TheExecutionEngine = LLVM::JITCompiler.new $TheModule
+
+    our_fpm = LLVM::FunctionPassManager.new $TheExecutionEngine, $TheModule
+
+    # Set up the optimizer pipeline.  Start with registering info about how the
+    # target lays out data structures.
+    #OurFPM.add(new DataLayout(*TheExecutionEngine->getDataLayout()));
+    # Provide basic AliasAnalysis support for GVN.
+    LLVM::C.add_basic_alias_analysis_pass our_fpm
+    # Do simple "peephole" optimizations and bit-twiddling optzns.
+    our_fpm.instcombine!
+    # Reassociate expressions.
+    our_fpm.reassociate!
+    # Eliminate Common SubExpressions.
+    our_fpm.gvn!
+    # Simplify the control flow graph (deleting unreachable blocks, etc).
+    our_fpm.simplifycfg!
+
+    # Set the global so the code gen can use this.
+    $TheFPM = our_fpm
+
     # Run the main "interpreter loop" now.
     MainLoop()
+
+    $TheFPM = 0
 
     # Print out all of the generated code.
     $TheModule.dump
