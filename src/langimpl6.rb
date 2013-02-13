@@ -451,7 +451,7 @@ module Toy
 
     case $CurTok
       when TOK_IDENTIFIER
-        fn_anem = $IdentifierStr
+        fn_name = $IdentifierStr
         kind = 0
         get_next_token
       when TOK_UNARY
