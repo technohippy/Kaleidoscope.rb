@@ -890,7 +890,21 @@ module Toy
         # If F conflicted, there was already something named 'Name'.  If it has a
         # body, don't allow redefinition or reextern.
         if f.name != @name
-          # TODO
+          # Delete the one we just made and get the existing one.
+          $TheModule.functions.delete f
+          f = $TheModule.functions[@name]
+
+          # If F already has a body, reject this.
+          unless f.basic_blocks.size == 0
+            ErrorF("redefinition of function")
+            return 0
+          end
+
+          # If F took a different number of args, reject.
+          unless f.params.size == @args.size
+            ErrorF("redefinition of function with different # args")
+            return 0
+          end
         end
 
         # Set names for all arguments.
