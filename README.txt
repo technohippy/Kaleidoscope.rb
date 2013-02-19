@@ -2,4 +2,4 @@ Kaleidoscope: Implementing a Language with LLVM in Ruby
 
 Ref. 
 - http://llvm.org/docs/tutorial/
-- https://github.com/jvoorhis/ruby-llvm
+- https://github.com/ruby-llvm/ruby-llvm
